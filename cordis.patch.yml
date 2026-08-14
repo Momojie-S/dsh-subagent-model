@@ -1,0 +1,9 @@
+# @momojie-s/dsh-subagent-model 组合包 patch 层：被 profile bundles 列表引用时应用。
+# 行 name 用包名（非 file:// URL），由 Node 模块解析到已安装的包。
+# 默认 toolName 为 subagent_model，与内置 subagent 工具共存不冲突。
+- insert:
+    - id: subagent-model
+      name: '@momojie-s/dsh-subagent-model'
+      config:
+        provider: spawn              # ctx.subagents 传输 provider，同内置 subagent 工具
+        backgroundMode: continuable  # 后台默认 continuable，与内置 subagent 行为对齐
