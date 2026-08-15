@@ -16,12 +16,12 @@ fork 官方 `@deepseek-ai/dsh-tool-subagent`（v0.1.0-rc 线），最小 diff：
 
 1. **底层能力本来就在**：`SubagentStartRequest.agentOptions`（`provider/model/maxTokens`）是请求级字段；DSH 运行时 `resolveChildAgentOptions()`（`dsh-subagent/child-agent.ts`）把请求级字段展开在父路由**之后**，即请求级覆盖父路由。内置工具只是把它做成加载时的静态 config。
 2. **fork 的改动**：把这三个字段提升为工具调用参数；`execute()` 里 `{ ...config.agentOptions, ...调用参数 }` 合并后放进 `request.agentOptions`。子代理创建、组合、深度记账、策略继承全由现有运行时处理，插件侧零新逻辑。
-3. **调用前校验（`validateModel: true`，默认开）**：显式指定了 `provider`/`model` 时，先查 `ctx.get('llm')` 注册表——provider 精确匹配 `listProviders()`；model 先试 `resolveModelInfo(provider, model)`，解析失败再对照 `listModels()` 目录，目录里也没有才报错（目录是 advisory 的：部分路由目录为空，让端点自己判断）。校验失败发生在任何子会话创建之前，错误信息附可用目录。
+3. **调用前校验（`validateModel: true`，默认开）**：显式指定了 `provider`/`model` 时，先查 `ctx.get('llm')` 注册表——provider 精确匹配 `listProviders()`；model 检查以 `listModels(provider)` 目录为**权威**：目录存在且不含该 id 即报错（并提示 model 由有效路由解释、跨路由要同时传 provider）。目录列不出来的路由退回 `resolveModelInfo` 形状校验，其余交给端点判断。校验失败发生在任何子会话创建之前，错误信息附可用目录。
 4. 其余行为（provider 生命周期镜像、`one-shot`/`continuable` 后台策略、前台结算与 dispose 错误隔离、stopReason 错误映射、prompt section）保持上游原文。
 
 ## 边界与限制
 
 - `toolName` 默认 `subagent_model`；与内置工具或其他 fork 实例重名会在 provider 出现时触发工具注册冲突（上游已知行为，见其 TODO 注释）。
-- model 单独指定（不给 provider）时，子代理继承父会话的 provider，校验也按该 provider 进行；若父会话没有 provider（理论上不发生于 agent 会话），跳过 model 校验。
+- model 单独指定（不给 provider）时，子代理继承父会话的 provider，校验也按该 provider 的目录进行；若父会话没有 provider（理论上不发生于 agent 会话），跳过 model 校验。跨路由的模型 id（如 deepseek 路由下传 GLM id）在目录权威校验下会**启动前**报错并附该路由目录，不再静默失败（ADR-0002）。
 - 校验不能发现"模型存在但订阅无权限/配额耗尽"这类运行时问题——那类 429 发生在子代理首个模型请求，按子代理会话的 error 路径结算。
 - 上游升级后本 fork 需人工对齐（改动处均有 `// fork:` 注释标记，`diff` 官方源码即可定位）。

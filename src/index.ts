@@ -58,9 +58,10 @@ export interface Config {
   /**
    * Validate call-selected routes against the `llm` registry before starting
    * the child (default true). An unknown provider or model fails fast with the
-   * available directory listed in the error. Validation is advisory over the
-   * catalog: a model absent from `listModels` but accepted by
-   * `resolveModelInfo` still passes.
+   * available directory listed in the error. The model check is authoritative
+   * whenever the effective route has a listable `listModels` directory; a
+   * route with no directory falls back to `resolveModelInfo` shape validation
+   * and otherwise leaves the id to the endpoint.
    */
   validateModel?: boolean
   /**
@@ -215,9 +216,13 @@ async function settleForegroundRun(run: SubagentRun): Promise<ForegroundToolResu
 /**
  * fork: fail fast with a teaching error when a call-selected route names a
  * provider or model the `llm` registry does not know. The provider check is
- * exact against registered routes; the model check is advisory over the
- * catalog — `resolveModelInfo` acceptance passes even when `listModels`
- * omits the id, and an unlistable route lets the endpoint judge the id.
+ * exact against registered routes; the model check is AUTHORITATIVE over the
+ * catalog whenever `listModels` returns one — an id the directory omits is
+ * rejected before any child session exists, because `resolveModelInfo`
+ * acceptance proves nothing (it validates metadata shape, not membership,
+ * and passes ids the endpoint will later reject). A route with no listable
+ * directory falls back to resolveModelInfo shape validation and otherwise
+ * leaves the id to endpoint-side judgment.
  * @param llm - the live llm registry.
  * @param parent - the delegating agent whose route supplies an inherited provider.
  * @param requested - the call-selected route fields, when any.
@@ -240,21 +245,27 @@ async function assertCallRouteResolvable(
   if (requested.model !== undefined) {
     const provider = requested.provider ?? parent.options.provider
     if (provider === undefined) return
+    let catalog: string[] = []
     try {
-      await llm.resolveModelInfo(provider, requested.model, signal)
+      catalog = (await llm.listModels(provider)).map(info => info.id)
     } catch {
-      let catalog: string[] = []
-      try {
-        catalog = (await llm.listModels(provider)).map(info => info.id)
-      } catch {
-        // Advisory only: an unlistable route keeps endpoint-side judgment.
-      }
-      if (catalog.length > 0 && !catalog.includes(requested.model)) {
+      // Unlistable route: no authoritative directory exists; fall through.
+    }
+    if (catalog.length > 0) {
+      // fork: the directory is AUTHORITATIVE when it exists. resolveModelInfo
+      // only validates metadata shape and accepts ids listModels omits, so a
+      // cross-route model id (e.g. a GLM id inherited under a deepseek route)
+      // used to pass here and die silently inside the child's first request.
+      if (!catalog.includes(requested.model)) {
         throw new Error(
-          `model "${requested.model}" is not available on provider "${provider}" — available models: ${catalog.join(', ')}`,
+          `model "${requested.model}" is not available on provider "${provider}" — available models: ${catalog.join(', ')}. The model argument is interpreted by the EFFECTIVE route (explicit provider, else the inherited parent route); pass provider too when the model belongs to another route.`,
         )
       }
+      return
     }
+    // Directory absent: keep endpoint-side judgment, but let resolveModelInfo
+    // shape validation catch what it can before any child session exists.
+    await llm.resolveModelInfo(provider, requested.model, signal)
   }
 }
 
@@ -385,11 +396,11 @@ export function apply(ctx: Context, config: Config): void {
         // fork: per-call model route selection, shadowing config.agentOptions.
         provider: {
           type: 'string',
-          description: 'Optional provider route id for this child (must match a configured model route). Omit to inherit the parent provider.',
+          description: 'Optional provider route id for this child (must match a configured model route). Omit to inherit the parent provider — then `model` must name a model of THAT inherited route.',
         },
         model: {
           type: 'string',
-          description: 'Optional model id interpreted by the provider route. Omit to inherit the parent model.',
+          description: 'Optional model id interpreted by the EFFECTIVE provider route — the explicit `provider` argument, else the inherited parent route; cross-route ids are not auto-routed, so pass `provider` too whenever the model belongs to another route. Omit to inherit the parent model.',
         },
         max_tokens: {
           type: 'number',

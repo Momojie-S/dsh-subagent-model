@@ -15,8 +15,8 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除模型选择外行为与原
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
-| `provider` | string? | provider 路由 id（Models 页配置的路由）。省略则继承父会话 |
-| `model` | string? | 模型 id。省略则继承父会话 |
+| `provider` | string? | provider 路由 id（Models 页配置的路由）。省略则继承父会话——此时 `model` 必须是该继承路由下的模型 |
+| `model` | string? | 模型 id，由**有效路由**（显式 `provider`，否则继承的父路由）解释；跨路由的 id 不会被自动转发，模型属于别的路由时务必同时传 `provider`。省略则继承父会话 |
 | `max_tokens` | number? | 子代理每次模型请求的输出 token 上限（正整数） |
 
 组合方式（最终路由优先级）：**调用参数 > 插件 config 的 `agentOptions` > 父会话路由**。
@@ -68,7 +68,7 @@ patch `config` 字段：
 > 用 subagent_model 委派一个任务，指定 model 为 glm-4.7，让它报告自己运行在什么模型上
 ```
 
-子代理回复 `glm-4.7`（父会话为其他模型时）即按次路由生效；再传一个不存在的模型名，应收到列出可用模型的错误。
+子代理回复 `glm-4.7`（父会话为其他模型时）即按次路由生效；再传一个不属于所选路由的模型名（如只传 `model` 不传 `provider`、且该 id 不在继承路由目录里），应在子代理启动**之前**收到列出该路由可用模型的错误——而不是子代理无声死掉。
 
 ---
 
