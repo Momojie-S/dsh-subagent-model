@@ -6,7 +6,7 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除模型选择外行为与原
 
 ## 环境要求
 
-- DeepSeek Harness `>= 0.1.0-rc.6`（验证版本：0.1.0-rc 线，Windows）
+- DeepSeek Harness `>= 0.1.0-rc.6`（已验证至 `0.1.1-rc.2`，Windows）
 - Host 组合已加载 `subagents` 服务及传输 provider（内置 `spawn` / `fork` 均可）
 
 ## 用法
