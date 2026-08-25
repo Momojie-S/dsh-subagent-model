@@ -1,9 +1,13 @@
 /**
  * Model-selectable delegation: a fork of `@deepseek-ai/dsh-tool-subagent`
- * (v0.1.0-rc line) that exposes the child's model route as PER-CALL tool
- * arguments. Everything else — provider lifecycle, background policy,
- * continuable children, settlement — is upstream behavior kept verbatim.
- * Changes are marked with `// fork:` comments.
+ * (v0.1.0-rc line) that exposes the child's model route AND context
+ * inheritance as PER-CALL tool arguments. By default (`defaultContext:
+ * 'inherit'`) the child is forked from the delegating conversation: seeded,
+ * at the moment of the call, with its completed-turn prefix — the latest
+ * state, not a snapshot frozen at session open. `fresh_context: true` starts
+ * an empty-context child instead. Everything else — provider lifecycle,
+ * background policy, continuable children, settlement — is upstream behavior
+ * kept verbatim. Changes are marked with `// fork:` comments.
  * @module @momojie-s/dsh-subagent-model
  */
 
@@ -29,8 +33,28 @@ const SUBAGENT_SECTION_ORDER = 116.5
 
 /** Config: which registered provider this tool delegates to, plus child defaults. */
 export interface Config {
-  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+  /**
+   * The `ctx.subagents` provider name for FRESH-CONTEXT calls (e.g.
+   * `spawn`): a child that starts with no inherited conversation. Must not
+   * name a provider that seeds children with parent context.
+   */
   provider: string
+  /**
+   * fork: the `ctx.subagents` provider name for INHERIT-CONTEXT calls —
+   * one whose children are seeded with the delegating conversation's
+   * completed-turn prefix AT THE MOMENT OF THE CALL (default `fork`). The
+   * seed is recomputed on every start from the live session log, so each
+   * inherited-context child sees the conversation's latest completed turns,
+   * never a snapshot frozen at session open or at an earlier call.
+   */
+  inheritProvider?: string
+  /**
+   * fork: context mode used when a call omits `fresh_context` (default
+   * `inherit` — the child is forked from this conversation). `fresh`
+   * restores the upstream always-empty-context default; an explicit
+   * `fresh_context` argument overrides this either way.
+   */
+  defaultContext?: 'inherit' | 'fresh'
   /**
    * Model-facing tool name (default `subagent_model`). Each loaded instance must
    * use a distinct name, and it must not collide with the upstream `subagent`
@@ -94,6 +118,10 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   provider: z.string().required(),
+  // fork: per-call context inheritance configuration. Defaults mirror the
+  // interface docs; direct apply() reads them through the same `??` fallbacks.
+  inheritProvider: z.string().default('fork'),
+  defaultContext: z.union(['inherit', 'fresh'] as const).default('inherit'),
   // fork: default toolName avoids colliding with the upstream `subagent` tool.
   toolName: z.string().default('subagent_model'),
   enableRunInBackground: z.boolean().default(true),
@@ -272,41 +300,46 @@ async function assertCallRouteResolvable(
 }
 
 /**
- * Model-facing wording from the provider's conversation-history descriptor
- * ({@link SubagentProvider.inheritsParentContext}).
- * A fresh child needs a standalone prompt; a forked child already sees the
- * conversation's completed turns — telling the model to restate everything
- * (or, worse, that the child "does not see this conversation") would be false
- * for a fork.
- * @param inheritsConversation - whether the child's conversation is seeded
- *   with the parent's completed turns; this says nothing about tool, service,
- *   scope, or authority inheritance.
+ * fork: model-facing wording for per-call context inheritance. An omitted
+ * `fresh_context` follows {@link Config.defaultContext}; an explicit
+ * argument flips the mode either way. Inherited-context children are seeded,
+ * at the moment of the call, with the conversation's completed-turn prefix
+ * (the delegating in-flight turn is structurally excluded — an unbalanced
+ * turn cannot be replayed); fresh-context children start empty and need a
+ * standalone prompt.
+ * @param defaultInherit - whether an omitted `fresh_context` inherits.
  * @returns the tool `description` and the `prompt` parameter description.
  */
-function providerWording(inheritsConversation: boolean): { description: string; promptDescription: string } {
-  if (inheritsConversation) {
+function contextWording(defaultInherit: boolean): { description: string; promptDescription: string } {
+  if (defaultInherit) {
     return {
       description:
-        'Delegate a task to a subagent that inherits this conversation: a child agent seeded with all '
-        + 'completed turns so far (it does not see the current in-flight turn). Use this when the subtask '
-        + 'builds on this conversation\'s context — a follow-up analysis, '
-        + 'a review, a continuation — without consuming this conversation\'s context for the work itself. '
-        + 'You receive its result, not its intermediate steps.',
+        'Delegate a task to a subagent running on a model route you choose per call. By default the child '
+        + 'is forked from this conversation: it is seeded, at the moment of the call, with all completed turns '
+        + 'so far — the conversation\'s latest state, not an older snapshot (the current in-flight turn is '
+        + 'excluded). Use this default when the subtask builds on this conversation\'s context — a follow-up '
+        + 'analysis, a review, a continuation — without consuming this conversation\'s context for the work '
+        + 'itself. Pass fresh_context: true to start the child with an empty context instead, and prefer that '
+        + 'for self-contained work: an inherited context re-sends the whole conversation on the child\'s '
+        + 'route. You receive the child\'s result, not its intermediate steps.',
       promptDescription:
-        'The task for the subagent. It already sees this conversation\'s completed turns, so build on them '
-        + 'freely and state only what is new.',
+        'The task for the subagent. By default the child already sees this conversation\'s completed turns '
+        + 'as of this call, so build on them freely and state only what is new. With fresh_context: true it '
+        + 'sees nothing of this conversation — include everything it needs.',
     }
   }
   return {
     description:
-      'Delegate a self-contained task to a subagent (a separate agent that works in its own context) '
-      + 'to offload focused, independent work — research, a scoped '
-      + 'implementation, an analysis — so it does not consume this conversation\'s context. The subagent '
-      + 'returns its result, not its intermediate steps. Give it a '
-      + 'complete, standalone prompt: it does not see this conversation.',
+      'Delegate a task to a subagent running on a model route you choose per call. By default the child '
+      + 'starts with an empty context: give it a complete, standalone prompt — it does not see this '
+      + 'conversation. Pass fresh_context: false to fork the child from this conversation instead: it is '
+      + 'seeded, at the moment of the call, with all completed turns so far — the latest state, not an older '
+      + 'snapshot (the current in-flight turn is excluded) — which suits subtasks that build on this '
+      + 'conversation\'s context. You receive the child\'s result, not its intermediate steps.',
     promptDescription:
-      'The complete, self-contained task for the subagent. It does not share this '
-      + 'conversation\'s context, so include everything it needs.',
+      'The complete, self-contained task for the subagent. By default it does not share this '
+      + 'conversation\'s context, so include everything it needs. With fresh_context: false it already '
+      + 'sees this conversation\'s completed turns as of the call, and you can state only what is new.',
   }
 }
 
@@ -321,7 +354,7 @@ interface DelegationRunSpec {
 /** Resolve the model's optional scheduling request into one execution route. */
 function resolveDelegationRun(
   request: DelegationRunRequest,
-  options: { readonly backgroundEnabled: boolean; readonly continuable: boolean },
+  options: { readonly backgroundEnabled: boolean; readonly defaultBackground: boolean },
 ): DelegationRunSpec {
   if (!options.backgroundEnabled) {
     // The validator permits undeclared keys, so schema omission also needs
@@ -332,10 +365,14 @@ function resolveDelegationRun(
     return { runInBackground: false }
   }
   return {
-    // Continuable work is independently scheduled unless the caller explicitly
-    // needs the result before its next action. One-shot policy keeps its existing
-    // foreground default because its background result requires Task collection.
-    runInBackground: request.run_in_background ?? options.continuable,
+    // fork: the omitted-argument default is mode-specific. Fresh-context
+    // children under `backgroundMode: continuable` keep the upstream
+    // independently-scheduled default (background, durable child); one-shot
+    // policy and inherited-context children keep the foreground default —
+    // an inherited-context delegation usually feeds the caller's next action,
+    // and its background result would require Job collection. An explicit
+    // run_in_background argument overrides the default on every path.
+    runInBackground: request.run_in_background ?? options.defaultBackground,
   }
 }
 
@@ -350,6 +387,10 @@ export function apply(ctx: Context, config: Config): void {
   const backgroundEnabled = config.enableRunInBackground !== false
   const continuable = (config.backgroundMode ?? 'one-shot') === 'continuable'
   const toolName = config.toolName ?? 'subagent_model'
+  // fork: dual-mode defaults. `provider` serves fresh-context calls;
+  // `inheritProvider` serves inherited-context calls (see Config docs).
+  const defaultInherit = (config.defaultContext ?? 'inherit') === 'inherit'
+  const inheritName = config.inheritProvider ?? 'fork'
   // Mirror provider lifecycle because sibling load order and HMR replacement
   // can change provider availability while this fiber remains active.
   let disposeTool: (() => void) | undefined
@@ -363,7 +404,28 @@ export function apply(ctx: Context, config: Config): void {
         + 'set maxDepth: \'provider-managed\' to leave the recursion budget to the provider',
       )
     }
-    const wording = providerWording(provider.inheritsParentContext)
+    // fork: the configured provider backs the fresh-context mode, so it must
+    // not itself seed parent context — a fresh_context call promises an
+    // empty-context child, and wording over an inheriting provider would lie.
+    if (provider.inheritsParentContext) {
+      throw new Error(
+        `tool-subagent: provider "${provider.name}" seeds children with the parent conversation — `
+        + 'config.provider must name a fresh-context provider (e.g. "spawn"); name a forking provider '
+        + 'through inheritProvider instead',
+      )
+    }
+    // fork: when the inherit provider is already registered, fail its numeric
+    // maxDepth incompatibility at mount too; a later-registering provider is
+    // still covered by the service's per-start capability check.
+    const inheritProvider = ctx.subagents.getProvider(inheritName)
+    if (typeof config.maxDepth === 'number' && inheritProvider !== undefined
+      && !inheritProvider.capabilities.depthLimit) {
+      throw new Error(
+        `tool-subagent: inherit provider "${inheritName}" cannot enforce maxDepth (no depthLimit capability) — `
+        + 'set maxDepth: \'provider-managed\' or use a depthLimit-capable inheritProvider',
+      )
+    }
+    const wording = contextWording(defaultInherit)
     if (continuable && provider.prepareContinuable === undefined) {
       throw new Error(
         `tool-subagent: provider "${provider.name}" does not support \`backgroundMode: continuable\``,
@@ -371,7 +433,8 @@ export function apply(ctx: Context, config: Config): void {
     }
     disposeTool = ctx.tools.register(defineTool({
       name: toolName,
-      // fork: extend the upstream description with the per-call model route.
+      // fork: extend the upstream description with the per-call model route
+      // and the mode-specific background defaults.
       description: wording.description
         + ' The child runs on a model route you choose per call: pass `provider` and/or `model` ids matching the '
         + 'deployment\'s configured model routes; omit both to inherit the parent route. Unknown ids fail fast with '
@@ -381,7 +444,13 @@ export function apply(ctx: Context, config: Config): void {
           // a separately installed capability, so this promise holds whenever the
           // continuable background path is reachable at all.
           ? continuable
-            ? ' This tool runs in the background by default, immediately returns a durable subagent id, and keeps the child conversation available for later turns. When that run settles, the runtime sends the parent a notice containing its outcome and any final assistant message; `send_message` starts a later turn in the same child conversation. Set `run_in_background: false` only when your next action depends on receiving the result.'
+            ? ' Fresh-context children (fresh_context: true) run in the background by default: the call '
+              + 'immediately returns a durable subagent id and keeps the child conversation available for later '
+              + 'turns; when that run settles, the runtime sends the parent a notice containing its outcome and '
+              + 'any final assistant message, and `send_message` starts a later turn in the same child '
+              + 'conversation. Inherited-context children are one-shot: by default the call waits and returns '
+              + 'the result directly; set `run_in_background: true` to run one as a background job you collect '
+              + 'with `job_output`.'
             : ' This call waits for the result by default. Set `run_in_background: true` to return a job id; collect with `job_output` and stop with `job_kill`.'
           : ' This call waits for the subagent and returns its result.'),
       parameters: {
@@ -394,6 +463,19 @@ export function apply(ctx: Context, config: Config): void {
           type: 'string',
           required: true,
           description: wording.promptDescription,
+        },
+        // fork: per-call context mode. Omitted follows defaultContext
+        // (inherit by default); an explicit value wins either way.
+        fresh_context: {
+          type: 'boolean' as const,
+          description: defaultInherit
+            ? 'Whether the child starts with an empty context. Omit for the default: the child is forked from '
+              + 'this conversation — seeded with its completed turns as of this call. Pass true for a '
+              + 'clean-context child whose prompt must be fully self-contained; pass false to force the fork '
+              + 'explicitly.'
+            : 'Whether the child starts with an empty context. Omit for the default: no conversation context, '
+              + 'standalone prompt required. Pass false to fork the child from this conversation\'s completed '
+              + 'turns as of the call.',
         },
         // fork: per-call model route selection, shadowing config.agentOptions.
         provider: {
@@ -412,7 +494,10 @@ export function apply(ctx: Context, config: Config): void {
           run_in_background: {
             type: 'boolean' as const,
             description: continuable
-              ? 'Whether to run in the background and return a durable subagent id immediately. Defaults to true. Set false to wait for the result when your next action depends on it.'
+              ? 'Whether to run in the background. Fresh-context children (fresh_context: true) default to '
+                + 'true and return a durable subagent id immediately. Inherited-context children default to '
+                + 'false — the call waits and returns the result; set true to run one as a background job you '
+                + 'collect with job_output.'
               : 'Whether to run as a background job and return its id. Defaults to false; collect with job_output or stop with job_kill.',
           },
         } : {},
@@ -485,6 +570,39 @@ export function apply(ctx: Context, config: Config): void {
         }
 
         const maxDepth = typeof config.maxDepth === 'number' ? config.maxDepth : undefined
+
+        // fork: per-call context mode — an explicit fresh_context argument
+        // wins either way; an omitted one follows defaultContext (inherit).
+        const inherit = args.fresh_context !== undefined
+          ? !args.fresh_context
+          : defaultInherit
+
+        // fork: inherited-context delegations resolve the inheriting provider
+        // NOW, from the live registry. The provider recomputes the
+        // completed-turn seed inside start(), from the parent's live session
+        // log — so the child inherits the conversation's LATEST completed
+        // turns, as of this call, never a snapshot from session open.
+        let providerName = config.provider
+        if (inherit) {
+          providerName = inheritName
+          const inheritProvider = ctx.subagents.getProvider(inheritName)
+          if (inheritProvider === undefined) {
+            const registered = ctx.subagents.list()
+            throw new Error(
+              `inherit-context provider "${inheritName}" is not registered — available providers: `
+              + `${registered.length > 0 ? registered.join(', ') : '(none)'}. `
+              + 'Fix the tool config\'s inheritProvider or load its backend plugin.',
+            )
+          }
+          if (!inheritProvider.inheritsParentContext) {
+            throw new Error(
+              `inherit-context provider "${inheritName}" does not seed children with the parent `
+              + 'conversation (inheritsParentContext is false) — use a forking provider such as "fork" '
+              + 'for inherited-context calls',
+            )
+          }
+        }
+
         const request = {
           label: args.description,
           prompt: [{ type: 'text', text: args.prompt }] as ContentBlock[],
@@ -496,9 +614,17 @@ export function apply(ctx: Context, config: Config): void {
           ...maxDepth !== undefined ? { maxDepth } : {},
         }
 
-        const runSpec = resolveDelegationRun(args, { backgroundEnabled, continuable })
+        // fork: only fresh-context children take the continuable path.
+        // Inherited-context children stay one-shot, mirroring the upstream
+        // `subagent_fork` binding: a continuable child's report channel would
+        // precede the inherited history, and its prefix is frozen once at
+        // creation — both defeat the fork this tool exists for.
+        const runSpec = resolveDelegationRun(args, {
+          backgroundEnabled,
+          defaultBackground: continuable && !inherit,
+        })
         if (runSpec.runInBackground) {
-          if (continuable) {
+          if (continuable && !inherit) {
             // Resolves at inbox acceptance: the child owns its own turns from
             // there, so this call neither waits for nor collects a result.
             const started = await ctx.subagents.startContinuable({
@@ -521,7 +647,7 @@ export function apply(ctx: Context, config: Config): void {
             owner: parent,
             run: () => {
               const controller = new AbortController()
-              const start = ctx.subagents.start(config.provider, { ...request, signal: controller.signal })
+              const start = ctx.subagents.start(providerName, { ...request, signal: controller.signal })
               return {
                 cancel: (reason?: string) => {
                   controller.abort(reason ?? 'background subagent task killed')
@@ -534,7 +660,7 @@ export function apply(ctx: Context, config: Config): void {
           return { kind: 'background' as const, jobId: id }
         }
 
-        const run: SubagentRun = await ctx.subagents.start(config.provider, {
+        const run: SubagentRun = await ctx.subagents.start(providerName, {
           ...request,
           signal: exec.signal,
         })
@@ -568,7 +694,15 @@ export function apply(ctx: Context, config: Config): void {
       order: SUBAGENT_SECTION_ORDER,
       text: context => disposeTool === undefined || ctx.tools.get(toolName, context.scope) === undefined
         ? ''
-        : `Use ${toolName} in the background by default, choosing the child's model route per call. Start independent delegations together in one assistant message and continue useful work while they run. Set \`run_in_background: false\` only when your next action depends on that subagent's result. When a background run settles, the runtime sends you a notice containing its outcome and any final assistant message.`,
+        : `Use ${toolName} for delegation, choosing the child's model route per call and whether it inherits `
+          + 'context. By default the child forks this conversation — seeded with its completed turns as of the '
+          + 'call — and the call waits for the result; restate anything from the current in-flight turn the '
+          + 'child must know, because the seed stops at the last completed turn. Pass `fresh_context: true` for '
+          + 'a clean-context child on self-contained work: it runs in the background by default as a durable '
+          + 'continuable subagent, so start independent delegations together in one assistant message and '
+          + 'continue useful work while they run. When a background run settles, the runtime sends you a notice '
+          + 'containing its outcome and any final assistant message. Set `run_in_background: false` only when '
+          + 'your next action depends on that subagent\'s result.',
     })
   }
 }

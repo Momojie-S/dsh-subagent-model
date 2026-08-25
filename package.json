@@ -1,7 +1,7 @@
 {
   "name": "@momojie-s/dsh-subagent-model",
-  "version": "0.1.0",
-  "description": "DSH 插件: 可按次指定模型路由的 subagent 委派工具（fork 自 @deepseek-ai/dsh-tool-subagent，最小 diff）",
+  "version": "0.2.0",
+  "description": "DSH 插件: 可按次指定模型路由与上下文继承的 subagent 委派工具，默认 fork 当前对话最新完成轮次（fork 自 @deepseek-ai/dsh-tool-subagent，最小 diff）",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
