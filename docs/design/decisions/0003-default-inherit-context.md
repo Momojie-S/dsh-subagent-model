@@ -2,7 +2,7 @@
 
 ## 状态
 
-accepted（第 3 条"继承模式恒 one-shot"已被 [0004](0004-inherit-continuable.md) 取代；其余条款不变）
+superseded（"默认继承"已被 [0005](0005-default-fresh.md) 翻回默认干净；本文的"按调用时刻最新状态做种子"语义仍有效，由 `fresh_context: false` 触发；第 3 条"继承恒 one-shot"此前已被 [0004](0004-inherit-continuable.md) 取代）
 
 ## 背景
 
