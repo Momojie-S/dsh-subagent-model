@@ -16,7 +16,7 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与
 | 参数 | 类型 | 说明 |
 |---|---|---|
 | `description` / `prompt` / `run_in_background` | - | 同内置 `subagent`；`run_in_background` 默认值随上下文模式不同（见下） |
-| `fresh_context` | boolean? | **默认省略 = 干净上下文**（prompt 必须完全自包含）。传 `false` = fork 当前对话（按调用时刻的最新完成轮次做种子）；显式传 `true` 强制干净 |
+| `fresh_context` | boolean? | **默认省略 = 干净上下文**（prompt 必须完全自包含）。传 `false` = fork 当前对话（按调用时刻的最新完成轮次做种子；整段对话会在子路由全额重算，留给真正需要上下文的任务）；显式传 `true` 强制干净 |
 | `provider` | string? | provider 路由 id（Models 页配置的路由）。省略则继承父会话——此时 `model` 必须是该继承路由下的模型 |
 | `model` | string? | 模型 id，由**有效路由**（显式 `provider`，否则继承的父路由）解释；跨路由的 id 不会被自动转发，模型属于别的路由时务必同时传 `provider`。省略则继承父会话 |
 | `max_tokens` | number? | 子代理每次模型请求的输出 token 上限（正整数） |

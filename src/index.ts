@@ -341,8 +341,9 @@ function contextWording(defaultInherit: boolean): { description: string; promptD
       + 'starts with an empty context: give it a complete, standalone prompt — it does not see this '
       + 'conversation. Pass fresh_context: false to fork the child from this conversation instead: it is '
       + 'seeded, at the moment of the call, with all completed turns so far — the latest state, not an older '
-      + 'snapshot (the current in-flight turn is excluded) — which suits subtasks that build on this '
-      + 'conversation\'s context. You receive the child\'s result, not its intermediate steps.',
+      + 'snapshot (the current in-flight turn is excluded). A fork re-sends the whole conversation on the '
+      + 'child\'s route, so reserve it for subtasks that build on this conversation\'s context. You receive '
+      + 'the child\'s result, not its intermediate steps.',
     promptDescription:
       'The complete, self-contained task for the subagent. By default it does not share this '
       + 'conversation\'s context, so include everything it needs. With fresh_context: false it already '
@@ -710,7 +711,9 @@ export function apply(ctx: Context, config: Config): void {
           + 'runtime sends you a notice containing its outcome and any final assistant message. Pass '
           + '`fresh_context: false` to fork the child from this conversation instead — seeded with its completed '
           + 'turns as of the call (restate anything from the current in-flight turn the child must know, because '
-          + 'the seed stops at the last completed turn); the fork waits for the result by default, and '
+          + 'the seed stops at the last completed turn) and re-sends the whole conversation on the child\'s '
+          + 'route, so reserve it for subtasks that build on this conversation; the fork waits for the result '
+          + 'by default, and '
           + '`run_in_background: true` keeps it as a durable forked conversation whose inherited view freezes at '
           + 'creation. Set `run_in_background: false` only when your next action depends on that subagent\'s '
           + 'result.',
