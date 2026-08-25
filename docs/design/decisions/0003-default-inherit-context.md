@@ -2,7 +2,7 @@
 
 ## 状态
 
-accepted
+accepted（第 3 条"继承模式恒 one-shot"已被 [0004](0004-inherit-continuable.md) 取代；其余条款不变）
 
 ## 背景
 

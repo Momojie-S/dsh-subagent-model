@@ -25,8 +25,10 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与
 
 | 模式 | 后台语义 |
 |---|---|
-| 继承（默认，省略 `fresh_context`） | **one-shot**：默认前台等待直接拿结果；传 `run_in_background: true` 走后台 job（`job_output` 收取）。与上游 `subagent_fork` 对齐 |
+| 继承（默认，省略 `fresh_context`） | 默认**前台等待**直接拿结果（种子 = 调用时刻最新完成轮次）；传 `run_in_background: true` 得到**可持续分叉会话**（durable 子代理 id，`send_message` 续聊；其对父对话的视野冻结在创建时刻）——与 rc.7+ 内置 `subagent_fork` 对齐 |
 | fresh（`fresh_context: true`） | 默认后台 continuable，返回可持续会话的子代理 id（`send_message` 续聊），与原版行为一致 |
+
+`backgroundMode: one-shot` 挂载时两种模式都默认前台；`run_in_background: true` 走后台 job（`job_output` 收取）。
 
 组合方式（最终路由优先级）：**调用参数 > 插件 config 的 `agentOptions` > 父会话路由**。未知 provider/model 在启动子代理**之前**快速失败，错误信息列出可用的 provider / 模型目录。
 
@@ -66,7 +68,7 @@ patch `config` 字段：
 | `defaultContext` | `inherit` | 调用省略 `fresh_context` 时的模式；`fresh` 恢复 0.1.x 的全干净上下文默认 |
 | `toolName` | `subagent_model` | 模型可见的工具名；与内置 `subagent` 工具共存，勿重名 |
 | `enableRunInBackground` | `true` | 是否暴露 `run_in_background` |
-| `backgroundMode` | `one-shot` | `one-shot` / `continuable`，只作用于 fresh 模式（继承模式恒 one-shot，同上游 `subagent_fork`） |
+| `backgroundMode` | `one-shot` | `one-shot` / `continuable`，作用于两种模式的后台路径（继承模式默认仍前台，见上表；ADR-0004） |
 | `agentOptions` | 无 | 所有子代理的默认路由（provider/model/maxTokens），被调用参数覆盖 |
 | `validateModel` | `true` | 调用级路由是否经 `llm` 注册表校验（未知 id 快速失败） |
 | `persona` | 无 | 子代理 persona，同内置工具 |

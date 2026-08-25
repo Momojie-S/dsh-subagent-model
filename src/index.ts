@@ -71,6 +71,11 @@ export interface Config {
    * to foreground; `continuable` defaults them to background, requires a
    * provider with the `prepareContinuable` capability, and returns the durable
    * child id. Follow-up adapters remain independently optional.
+   *
+   * fork: `continuable` routes background calls of BOTH context modes to
+   * durable continuable children (fresh-context calls also DEFAULT to
+   * background; inherited-context calls default to foreground and reach a
+   * durable forked child only through an explicit `run_in_background: true`).
    */
   backgroundMode?: 'one-shot' | 'continuable'
   /**
@@ -448,9 +453,9 @@ export function apply(ctx: Context, config: Config): void {
               + 'immediately returns a durable subagent id and keeps the child conversation available for later '
               + 'turns; when that run settles, the runtime sends the parent a notice containing its outcome and '
               + 'any final assistant message, and `send_message` starts a later turn in the same child '
-              + 'conversation. Inherited-context children are one-shot: by default the call waits and returns '
-              + 'the result directly; set `run_in_background: true` to run one as a background job you collect '
-              + 'with `job_output`.'
+              + 'conversation. Inherited-context children default to waiting for the result; pass '
+              + '`run_in_background: true` to keep one as a durable forked child conversation instead (its view '
+              + 'of this conversation freezes at creation — start a new call for the newest state).'
             : ' This call waits for the result by default. Set `run_in_background: true` to return a job id; collect with `job_output` and stop with `job_kill`.'
           : ' This call waits for the subagent and returns its result.'),
       parameters: {
@@ -496,8 +501,8 @@ export function apply(ctx: Context, config: Config): void {
             description: continuable
               ? 'Whether to run in the background. Fresh-context children (fresh_context: true) default to '
                 + 'true and return a durable subagent id immediately. Inherited-context children default to '
-                + 'false — the call waits and returns the result; set true to run one as a background job you '
-                + 'collect with job_output.'
+                + 'false — the call waits and returns the result; set true to start a durable forked child '
+                + 'conversation (send_message continues it; its inherited view freezes at creation).'
               : 'Whether to run as a background job and return its id. Defaults to false; collect with job_output or stop with job_kill.',
           },
         } : {},
@@ -614,21 +619,23 @@ export function apply(ctx: Context, config: Config): void {
           ...maxDepth !== undefined ? { maxDepth } : {},
         }
 
-        // fork: only fresh-context children take the continuable path.
-        // Inherited-context children stay one-shot, mirroring the upstream
-        // `subagent_fork` binding: a continuable child's report channel would
-        // precede the inherited history, and its prefix is frozen once at
-        // creation — both defeat the fork this tool exists for.
+        // fork: the continuable route follows backgroundMode for BOTH modes.
+        // Fresh children keep the upstream independently-scheduled default;
+        // inherited-context children stay foreground-by-default (ADR-0003:
+        // latest-state-per-call is that mode's point) and reach a durable
+        // forked child only through an explicit run_in_background: true — a
+        // long-lived branch whose inherited view freezes at creation, matching
+        // the built-in continuable subagent_fork (ADR-0004).
         const runSpec = resolveDelegationRun(args, {
           backgroundEnabled,
           defaultBackground: continuable && !inherit,
         })
         if (runSpec.runInBackground) {
-          if (continuable && !inherit) {
+          if (continuable) {
             // Resolves at inbox acceptance: the child owns its own turns from
             // there, so this call neither waits for nor collects a result.
             const started = await ctx.subagents.startContinuable({
-              provider: config.provider,
+              provider: providerName,
               label: args.description,
               request,
               signal: exec.signal,
@@ -697,12 +704,14 @@ export function apply(ctx: Context, config: Config): void {
         : `Use ${toolName} for delegation, choosing the child's model route per call and whether it inherits `
           + 'context. By default the child forks this conversation — seeded with its completed turns as of the '
           + 'call — and the call waits for the result; restate anything from the current in-flight turn the '
-          + 'child must know, because the seed stops at the last completed turn. Pass `fresh_context: true` for '
-          + 'a clean-context child on self-contained work: it runs in the background by default as a durable '
-          + 'continuable subagent, so start independent delegations together in one assistant message and '
-          + 'continue useful work while they run. When a background run settles, the runtime sends you a notice '
-          + 'containing its outcome and any final assistant message. Set `run_in_background: false` only when '
-          + 'your next action depends on that subagent\'s result.',
+          + 'child must know, because the seed stops at the last completed turn. Pass `run_in_background: true` '
+          + 'on an inherited-context child to keep it as a durable forked conversation you continue through '
+          + 'send_message (its inherited view freezes at creation; start a new call for the newest state). '
+          + 'Pass `fresh_context: true` for a clean-context child on self-contained work: it runs in the '
+          + 'background by default as a durable continuable subagent, so start independent delegations together '
+          + 'in one assistant message and continue useful work while they run. When a background run settles, '
+          + 'the runtime sends you a notice containing its outcome and any final assistant message. Set '
+          + '`run_in_background: false` only when your next action depends on that subagent\'s result.',
     })
   }
 }
