@@ -251,6 +251,34 @@ async function settleForegroundRun(run: SubagentRun): Promise<ForegroundToolResu
 }
 
 /**
+ * fork: the delegating conversation's LIVE model route — the provider/model of
+ * its most recent durable model REQUEST, exactly what the caller is talking on
+ * right now. Upstream inheritance reads `parent.options.model`, the seed value
+ * stamped at create/resume time; a Web session that switched models through
+ * the UI (`session.selectModel`) keeps running on the new selection while its
+ * options stamp — and therefore every naively inherited child route — stays on
+ * the stale creation-time default. The request header tracks the live
+ * selection instead: a delegation happens mid-turn, so the previous step's
+ * logged request already carries the switch. Returns an owned plain object;
+ * `undefined` when the session has never completed a request (blank session).
+ * @param parent - the delegating agent.
+ */
+function liveParentRoute(parent: Agent): { provider?: string; model?: string } | undefined {
+  try {
+    const config = parent.session.requestHeader()?.config
+    if (config === undefined || config === null) return undefined
+    const provider = typeof config.provider === 'string' ? config.provider : undefined
+    const model = typeof config.model === 'string' ? config.model : undefined
+    if (provider === undefined && model === undefined) return undefined
+    return { ...(provider !== undefined ? { provider } : {}), ...(model !== undefined ? { model } : {}) }
+  } catch {
+    // A missing/unreadable header must degrade to upstream behavior, never
+    // fail the delegation itself.
+    return undefined
+  }
+}
+
+/**
  * fork: fail fast with a teaching error when a call-selected route names a
  * provider or model the `llm` registry does not know. The provider check is
  * exact against registered routes; the model check is AUTHORITATIVE over the
@@ -261,13 +289,14 @@ async function settleForegroundRun(run: SubagentRun): Promise<ForegroundToolResu
  * directory falls back to resolveModelInfo shape validation and otherwise
  * leaves the id to endpoint-side judgment.
  * @param llm - the live llm registry.
- * @param parent - the delegating agent whose route supplies an inherited provider.
+ * @param inherited - fork: the effective inherited provider (live route first,
+ *   parent options as the degraded fallback) that interprets a bare `model`.
  * @param requested - the call-selected route fields, when any.
  * @param signal - caller cancellation for the advisory lookups.
  */
 async function assertCallRouteResolvable(
   llm: LlmRuntime,
-  parent: Agent,
+  inherited: { provider?: string },
   requested: { provider?: string; model?: string },
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -280,7 +309,7 @@ async function assertCallRouteResolvable(
     }
   }
   if (requested.model !== undefined) {
-    const provider = requested.provider ?? parent.options.provider
+    const provider = requested.provider ?? inherited.provider
     if (provider === undefined) return
     let catalog: string[] = []
     try {
@@ -445,7 +474,8 @@ export function apply(ctx: Context, config: Config): void {
       // and the mode-specific background defaults.
       description: wording.description
         + ' The child runs on a model route you choose per call: pass `provider` and/or `model` ids matching the '
-        + 'deployment\'s configured model routes; omit both to inherit the parent route. Unknown ids fail fast with '
+        + 'deployment\'s configured model routes; omit both to inherit this conversation\'s CURRENT route (the one '
+        + 'its latest model request ran on — not an older default). Unknown ids fail fast with '
         + 'the available directory listed in the error.'
         + (backgroundEnabled
           // The completion notice is the continuation service's own behavior, not
@@ -486,13 +516,16 @@ export function apply(ctx: Context, config: Config): void {
               + 'turns as of the call.',
         },
         // fork: per-call model route selection, shadowing config.agentOptions.
+        // Omission inherits the conversation's LIVE route (its most recent
+        // model request), not the creation-time options stamp — see
+        // {@link liveParentRoute}.
         provider: {
           type: 'string',
-          description: 'Optional provider route id for this child (must match a configured model route). Omit to inherit the parent provider — then `model` must name a model of THAT inherited route.',
+          description: 'Optional provider route id for this child (must match a configured model route). Omit to inherit this conversation\'s CURRENT provider route (the one its latest model request ran on) — then `model` must name a model of THAT route.',
         },
         model: {
           type: 'string',
-          description: 'Optional model id interpreted by the EFFECTIVE provider route — the explicit `provider` argument, else the inherited parent route; cross-route ids are not auto-routed, so pass `provider` too whenever the model belongs to another route. Omit to inherit the parent model.',
+          description: 'Optional model id interpreted by the EFFECTIVE provider route — the explicit `provider` argument, else the inherited current conversation route; cross-route ids are not auto-routed, so pass `provider` too whenever the model belongs to another route. Omit to inherit this conversation\'s CURRENT model.',
         },
         max_tokens: {
           type: 'number',
@@ -561,7 +594,17 @@ export function apply(ctx: Context, config: Config): void {
 
         // fork: per-call route selection over the configured defaults, then
         // advisory validation before any child session is created.
+        //
+        // fork: the inherited base is the conversation's LIVE route (its most
+        // recent durable request header), not `parent.options` — see
+        // {@link liveParentRoute}. A Web session that switched models through
+        // the UI must delegate on its CURRENT model, not its creation-time
+        // seed. Priority stays: call arguments > config.agentOptions > live
+        // route; a blank session (no completed request yet) degrades to the
+        // upstream behavior with an empty base.
+        const liveRoute = liveParentRoute(parent)
         const callOptions: AgentOptions = {
+          ...liveRoute,
           ...config.agentOptions,
           ...args.provider !== undefined ? { provider: args.provider } : {},
           ...args.model !== undefined ? { model: args.model } : {},
@@ -570,7 +613,11 @@ export function apply(ctx: Context, config: Config): void {
         if (config.validateModel !== false && (args.provider !== undefined || args.model !== undefined)) {
           const llm = ctx.get('llm')
           if (llm !== undefined) {
-            await assertCallRouteResolvable(llm, parent, {
+            await assertCallRouteResolvable(llm, {
+              // A bare `model` argument is interpreted by the EFFECTIVE
+              // provider after the full merge, not by the raw parent options.
+              provider: callOptions.provider,
+            }, {
               ...args.provider !== undefined ? { provider: args.provider } : {},
               ...args.model !== undefined ? { model: args.model } : {},
             }, exec.signal)

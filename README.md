@@ -17,8 +17,8 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与
 |---|---|---|
 | `description` / `prompt` / `run_in_background` | - | 同内置 `subagent`；`run_in_background` 默认值随上下文模式不同（见下） |
 | `fresh_context` | boolean? | **默认省略 = 干净上下文**（prompt 必须完全自包含）。传 `false` = fork 当前对话（按调用时刻的最新完成轮次做种子；整段对话会在子路由全额重算，留给真正需要上下文的任务）；显式传 `true` 强制干净 |
-| `provider` | string? | provider 路由 id（Models 页配置的路由）。省略则继承父会话——此时 `model` 必须是该继承路由下的模型 |
-| `model` | string? | 模型 id，由**有效路由**（显式 `provider`，否则继承的父路由）解释；跨路由的 id 不会被自动转发，模型属于别的路由时务必同时传 `provider`。省略则继承父会话 |
+| `provider` | string? | provider 路由 id（Models 页配置的路由）。省略则继承**本对话当前**路由——0.4.0 起读父会话最近一次模型请求的真实路由（UI 切过模型立即跟上），不再沿用会话创建时的旧戳；此时 `model` 必须是该路由下的模型 |
+| `model` | string? | 模型 id，由**有效路由**（显式 `provider`，否则继承的当前对话路由）解释；跨路由的 id 不会被自动转发，模型属于别的路由时务必同时传 `provider`。省略则同上继承实时路由 |
 | `max_tokens` | number? | 子代理每次模型请求的输出 token 上限（正整数） |
 
 上下文模式与后台默认（`backgroundMode: continuable` 挂载时）：
@@ -30,9 +30,11 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与
 
 `backgroundMode: one-shot` 挂载时两种模式都默认前台；`run_in_background: true` 走后台 job（`job_output` 收取）。
 
-组合方式（最终路由优先级）：**调用参数 > 插件 config 的 `agentOptions` > 父会话路由**。未知 provider/model 在启动子代理**之前**快速失败，错误信息列出可用的 provider / 模型目录。
+组合方式（最终路由优先级）：**调用参数 > 插件 config 的 `agentOptions` > 父会话实时路由（最近一次请求）> 父会话 options 兜底**。未知 provider/model 在启动子代理**之前**快速失败，错误信息列出可用的 provider / 模型目录。
 
 > ⚠️ **版本间默认值变更史**：0.1.x 省略参数 = 干净上下文；**0.2.0 改为默认继承**（破坏性）；**0.3.0 改回默认干净**（破坏性，依据使用分布与成本不对称，见 ADR-0005）——继承用 `fresh_context: false` 或部署配置 `defaultContext: inherit`。另：`provider` 配置必须是 fresh 类 provider（如 `spawn`）——配成 `fork` 会在挂载时报错，继承通道用 `inheritProvider`。
+>
+> **0.4.0 路由继承修正**：省略 `provider`/`model` 时的继承源从官方的会话创建戳记（`parent.options.model`）改为父会话**最近一次模型请求的真实路由**——修掉"UI 切换模型后子代理仍跑旧模型"的上游缺陷（见 ADR-0006）。显式传参行为不变。
 
 ## 安装
 
