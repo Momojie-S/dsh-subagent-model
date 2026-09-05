@@ -1,5 +1,7 @@
 # dsh-subagent-model
 
+> **⚠️ 已废弃（2026-09-05）**：DSH **0.1.2-rc.1** 起官方原生支持子 agent 模型路由——开启 `subagent-model-selection` 设置（配套 `modelSelectionSettings: true`）后，内置 `subagent` / `subagent_fork` 工具即暴露 `provider` / `model` / `reasoning_effort` 调用参数与 `list_subagent_models` 发现工具；上下文分支（fresh / 继承）由 `subagent` + `subagent_fork` 双工具实例覆盖。本插件不再维护。残留差异（调用级 `max_tokens`、单工具合并形态）经评估为非刚需。
+
 一个 DeepSeek Harness (DSH) 插件：注册 **`subagent_model`** 工具——在[内置 subagent 工具](https://github.com/deepseek-ai/deepseek-harness)基础上，把子代理的**模型路由**（provider / model / max_tokens）和**上下文继承**（fresh_context）都暴露为**每次调用可选的参数**。
 
 fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与原版一致（后台策略、continuable 子会话、工具过滤、persona、深度限制全部保留）。
@@ -7,6 +9,7 @@ fork 自官方 `@deepseek-ai/dsh-tool-subagent`，除这两组参数外行为与
 ## 环境要求
 
 - DeepSeek Harness `>= 0.1.0-rc.6`（已验证至 `0.1.1-rc.2`，Windows）
+- **0.1.2-rc.1+：请改用官方原生模型路由（见顶部废弃声明），本插件不再加载维护**
 - Host 组合已加载 `subagents` 服务；fresh 模式需要 `spawn` 类 provider，默认继承模式需要 `fork` 类 provider（官方 base bundle 两者都带）
 
 ## 用法
